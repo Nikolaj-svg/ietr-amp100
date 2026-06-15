@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ИЭТР · Усилитель мощности 100W</title>
+    <meta
+      name="description"
+      content="Интерактивное электронное техническое руководство для проекта Усилитель мощности 100W, БИВ232/БИВ236."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./assets/vendor/occt-import-js.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./assets/vendor/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div>
+          <p>Интерактивное электронное техническое руководство</p>
+          <h1>Усилитель мощности 100W</h1>
+          <span>БИВ232 / БИВ236 · Засухин Н. А., Хлудин П. С., Сметанин Л. В. · Москва, 2026</span>
+        </div>
+        <button class="print-button" id="printButton" type="button">Печать</button>
+      </header>
+
+      <div class="layout">
+        <aside class="nav-panel no-print" aria-label="Разделы ИЭТР">
+          <nav id="sectionNav"></nav>
+        </aside>
+
+        <main class="content" id="content" tabindex="-1"></main>
+
+        <aside class="viewer-panel no-print" aria-label="Интерактивная 3D-модель">
+          <div class="viewer-head">
+            <div>
+              <p>3D-модель изделия</p>
+              <h2>Плата и корпус</h2>
+            </div>
+            <span id="viewerStatus" class="status">Загрузка</span>
+          </div>
+
+          <div class="viewer-tools" id="viewerControls">
+            <button type="button" data-action="autorotate">Автовращение</button>
+            <button type="button" data-action="reset">Сброс</button>
+            <button type="button" data-toggle="case" class="is-active" aria-pressed="true">Корпус: вкл</button>
+            <button type="button" data-focus="board">Плата</button>
+            <button type="button" data-focus="ics">ОУ</button>
+            <button type="button" data-focus="transistors">Транзисторы</button>
+            <button type="button" data-focus="capacitors">Конденсаторы</button>
+            <button type="button" data-focus="resistors">Резисторы</button>
+            <button type="button" data-focus="connectors">Разъёмы</button>
+          </div>
+
+          <div class="viewer" id="viewer">
+            <div class="viewer-loader" id="viewerFallback">
+              <span></span>
+              Подготовка STEP-модели
+            </div>
+          </div>
+
+          <div class="part-card">
+            <span>Выбранный узел</span>
+            <strong id="selectedPartName">Вся сборка</strong>
+            <p id="selectedPartDesc">Вращайте модель, нажимайте на элементы или выбирайте разделы руководства.</p>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
