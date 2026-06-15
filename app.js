@@ -371,7 +371,7 @@ class AmpViewer {
     this.setStatus("STEP", "");
     if (typeof window.occtimportjs !== "function") throw new Error("occt-import-js is not available");
     const occt = await window.occtimportjs({ locateFile: (file) => `./assets/vendor/${file}` });
-    const response = await fetch("./assets/models/amp100.STEP");
+    const response = await fetch("./assets/models/assembly.step");
     if (!response.ok) throw new Error(`STEP request failed: ${response.status}`);
     const fileBuffer = new Uint8Array(await response.arrayBuffer());
     const result = occt.ReadStepFile(fileBuffer, {
@@ -394,9 +394,17 @@ class AmpViewer {
       this.pickables.push(mesh);
     });
     this.normalizeModel();
-    this.createSyntheticCase();
+    if (!this.hasImportedCase()) this.createSyntheticCase();
     this.focus("all", { updateCard: true });
     this.status.title = `STEP: ${result.meshes.length} сеток`;
+  }
+
+  hasImportedCase() {
+    const hasCase = this.pickables.some((object) => object.userData.tags?.includes("case"));
+    if (hasCase) {
+      this.caseObjects = this.pickables.filter((object) => object.userData.tags?.includes("case"));
+    }
+    return hasCase;
   }
 
   createMesh(sourceMesh, tags, nodeName) {
@@ -413,6 +421,9 @@ class AmpViewer {
       color: colorForMesh(sourceColor, tags),
       roughness: roughnessFor(tags),
       metalness: tags.includes("copper") ? 0.18 : 0.04,
+      transparent: tags.includes("case"),
+      opacity: tags.includes("case") ? 0.22 : 1,
+      depthWrite: !tags.includes("case"),
       side: THREE.DoubleSide,
     });
     if (tags.includes("leds")) {
@@ -661,7 +672,7 @@ class AmpViewer {
     const maxDim = Math.max(size.x, size.y, size.z, 10);
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
     const distance = Math.min(Math.max((maxDim / (2 * Math.tan(fov / 2))) * 1.55, 45), 480);
-    const direction = new THREE.Vector3(0.9, -1.05, 0.72).normalize();
+    const direction = new THREE.Vector3(0.9, -1.05, 1.05).normalize();
     this.camera.position.copy(center).add(direction.multiplyScalar(distance));
     this.controls.target.copy(center);
     this.controls.update();
@@ -757,7 +768,7 @@ function createVentDarkDisc(x, y, z, material) {
 }
 
 function classifyMesh(name) {
-  const source = name.toUpperCase();
+  const source = decodeStepEscapes(name).toUpperCase();
   const tags = [];
   if (source.includes("LAYER") || source.includes("BOARD") || source.includes("PCB")) tags.push("board");
   if (/^R\d+/.test(source) || source.includes("RES")) tags.push("resistors");
@@ -765,6 +776,8 @@ function classifyMesh(name) {
   if (/^Q\d+/.test(source) || /^VT\d+/.test(source) || source.includes("BD139") || source.includes("2SC") || source.includes("2SA") || source.includes("KT3102")) tags.push("transistors");
   if (/^IC\d+/.test(source) || /^OP\d+/.test(source) || /^DA\d+/.test(source) || source.includes("TL072") || source.includes("MC4558") || source.includes("7815") || source.includes("7915")) tags.push("ics");
   if (/^J\d+/.test(source) || /^XS\d+/.test(source) || /^XP\d+/.test(source) || source.includes("CONN") || source.includes("SW")) tags.push("connectors");
+  if (source.includes("КОРП") || source.includes("КРЫШ") || source.includes("ВЫТЯНУТ") || source.includes("CASE") || source.includes("COVER")) tags.push("case");
+  if (source.includes("БОЛТ") || source.includes("SCREW") || source.includes("BOLT")) tags.push("case");
   if (source.includes("COPPER")) tags.push("copper");
   if (!tags.length) tags.push("component");
   return tags;
@@ -787,6 +800,7 @@ function forcedColorFor(tags) {
   if (tags.includes("transistors")) return 0x3a3f45;
   if (tags.includes("ics")) return 0x27313d;
   if (tags.includes("connectors")) return 0x2fa9ba;
+  if (tags.includes("case")) return 0xc5ccd8;
   return null;
 }
 
@@ -807,12 +821,15 @@ function rememberMaterialBase(material) {
 }
 
 function cleanPartName(name) {
-  const raw = (name || "Компонент").split("~")[0].trim();
+  const raw = decodeStepEscapes(name || "Компонент").split("~")[0].trim();
   if (/^R\d+/i.test(raw)) return `Резистор ${raw}`;
   if (/^C\d+/i.test(raw)) return `Конденсатор ${raw}`;
   if (/^Q\d+/i.test(raw) || /^VT\d+/i.test(raw)) return `Транзистор ${raw}`;
   if (/^IC\d+/i.test(raw) || /^OP\d+/i.test(raw) || /^DA\d+/i.test(raw)) return `Микросхема ${raw}`;
   if (/^J\d+/i.test(raw) || /^XS\d+/i.test(raw) || /^XP\d+/i.test(raw)) return `Разъём ${raw}`;
+  if (/корп/i.test(raw)) return "Корпус ABS";
+  if (/крыш/i.test(raw)) return "Крышка корпуса";
+  if (/болт/i.test(raw)) return "Крепёжный болт";
   if (raw.toUpperCase().includes("LAYER")) return "Печатная плата";
   return raw.replace(/_/g, " ");
 }
@@ -830,6 +847,17 @@ function describeTags(tags) {
 function primaryTag(tags = []) {
   const priority = ["connectors", "transistors", "ics", "capacitors", "resistors", "case", "board"];
   return priority.find((tag) => tags.includes(tag)) || "all";
+}
+
+function decodeStepEscapes(value = "") {
+  return String(value).replace(/\\X2\\([0-9A-Fa-f]+)\\X0\\/g, (_, hex) => {
+    let result = "";
+    for (let i = 0; i < hex.length; i += 4) {
+      const code = Number.parseInt(hex.slice(i, i + 4), 16);
+      if (!Number.isNaN(code)) result += String.fromCharCode(code);
+    }
+    return result;
+  });
 }
 
 function toFlatFloatArray(values) {
