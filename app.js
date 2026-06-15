@@ -373,7 +373,9 @@ class AmpViewer {
     const occt = await window.occtimportjs({ locateFile: (file) => `./assets/vendor/${file}` });
     const response = await fetch("./assets/models/assembly.step");
     if (!response.ok) throw new Error(`STEP request failed: ${response.status}`);
-    const fileBuffer = new Uint8Array(await response.arrayBuffer());
+    const arrayBuffer = await response.arrayBuffer();
+    const solidNames = extractStepSolidNames(new TextDecoder("utf-8").decode(arrayBuffer));
+    const fileBuffer = new Uint8Array(arrayBuffer);
     const result = occt.ReadStepFile(fileBuffer, {
       linearUnit: "millimeter",
       linearDeflectionType: "bounding_box_ratio",
@@ -381,22 +383,23 @@ class AmpViewer {
       angularDeflection: 0.4,
     });
     if (!result.success || !result.meshes?.length) throw new Error("STEP import returned no meshes");
-    this.buildFromOcctResult(result);
+    this.buildFromOcctResult(result, solidNames);
   }
 
-  buildFromOcctResult(result) {
+  buildFromOcctResult(result, solidNames = []) {
     const nodeNames = mapMeshNodeNames(result.root);
     result.meshes.forEach((sourceMesh, index) => {
       const nodeName = nodeNames[index] || sourceMesh.name || "";
-      const tags = classifyMesh(`${nodeName} ${sourceMesh.name || ""}`);
-      const mesh = this.createMesh(sourceMesh, tags, nodeName);
+      const solidName = solidNames[index] || "";
+      const tags = classifyMesh(`${solidName} ${nodeName} ${sourceMesh.name || ""}`);
+      const mesh = this.createMesh(sourceMesh, tags, solidName || nodeName);
       this.modelRoot.add(mesh);
       this.pickables.push(mesh);
     });
     this.normalizeModel();
     if (!this.hasImportedCase()) this.createSyntheticCase();
     this.focus("all", { updateCard: true });
-    this.status.title = `STEP: ${result.meshes.length} сеток`;
+    this.status.title = `STEP: ${result.meshes.length} сеток; ${summarizeTags(this.pickables)}`;
   }
 
   hasImportedCase() {
@@ -721,6 +724,30 @@ function mapMeshNodeNames(root) {
   }
   walk(root);
   return names;
+}
+
+function extractStepSolidNames(stepText) {
+  const names = [];
+  const pattern = /MANIFOLD_SOLID_BREP\s*\(\s*'((?:[^']|'')*)'/g;
+  let match = pattern.exec(stepText);
+  while (match) {
+    names.push(decodeStepEscapes(match[1].replaceAll("''", "'")));
+    match = pattern.exec(stepText);
+  }
+  return names;
+}
+
+function summarizeTags(objects) {
+  const counts = {};
+  objects.forEach((object) => {
+    (object.userData.tags || []).forEach((tag) => {
+      counts[tag] = (counts[tag] || 0) + 1;
+    });
+  });
+  return Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([tag, count]) => `${tag}:${count}`)
+    .join(", ");
 }
 
 function roundedRectShape(width, height, radius, offsetX = 0, offsetY = 0) {
