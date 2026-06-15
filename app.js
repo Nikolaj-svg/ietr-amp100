@@ -769,16 +769,20 @@ function createVentDarkDisc(x, y, z, material) {
 
 function classifyMesh(name) {
   const source = decodeStepEscapes(name).toUpperCase();
+  const caseSource = source.replaceAll("AMP100_ВКОРПУС", "");
   const tags = [];
+  const hasRef = (prefix) => new RegExp(`(^|[\\\\/\\s._-])${prefix}\\d+`, "i").test(source);
   if (source.includes("LAYER") || source.includes("BOARD") || source.includes("PCB")) tags.push("board");
-  if (/^R\d+/.test(source) || source.includes("RES")) tags.push("resistors");
-  if (/^C\d+/.test(source) || source.includes("CAP")) tags.push("capacitors");
-  if (/^Q\d+/.test(source) || /^VT\d+/.test(source) || source.includes("BD139") || source.includes("2SC") || source.includes("2SA") || source.includes("KT3102")) tags.push("transistors");
-  if (/^IC\d+/.test(source) || /^OP\d+/.test(source) || /^DA\d+/.test(source) || source.includes("TL072") || source.includes("MC4558") || source.includes("7815") || source.includes("7915")) tags.push("ics");
-  if (/^J\d+/.test(source) || /^XS\d+/.test(source) || /^XP\d+/.test(source) || source.includes("CONN") || source.includes("SW")) tags.push("connectors");
-  if (source.includes("КОРП") || source.includes("КРЫШ") || source.includes("ВЫТЯНУТ") || source.includes("CASE") || source.includes("COVER")) tags.push("case");
-  if (source.includes("БОЛТ") || source.includes("SCREW") || source.includes("BOLT")) tags.push("case");
+  if (hasRef("R") || source.includes("RES")) tags.push("resistors");
+  if (hasRef("C") || source.includes("CAP")) tags.push("capacitors");
+  if (hasRef("Q") || hasRef("VT") || source.includes("BD139") || source.includes("2SC") || source.includes("2SA") || source.includes("KT3102")) tags.push("transistors");
+  if (hasRef("IC") || hasRef("OP") || hasRef("DA") || source.includes("TL072") || source.includes("MC4558") || source.includes("7815") || source.includes("7915")) tags.push("ics");
+  if (hasRef("J") || hasRef("XS") || hasRef("XP") || source.includes("CONN") || source.includes("SW")) tags.push("connectors");
   if (source.includes("COPPER")) tags.push("copper");
+  if (!tags.length && source.includes("AMP100.STEP-1")) tags.push("board");
+  if (!tags.length && (caseSource.includes("КОРП") || caseSource.includes("КРЫШ") || caseSource.includes("ВЫТЯНУТ") || caseSource.includes("БОБЫШКА") || caseSource.includes("СКРУГ") || caseSource.includes("CASE") || caseSource.includes("COVER") || caseSource.includes("БОЛТ") || caseSource.includes("SCREW") || caseSource.includes("BOLT"))) {
+    tags.push("case");
+  }
   if (!tags.length) tags.push("component");
   return tags;
 }
