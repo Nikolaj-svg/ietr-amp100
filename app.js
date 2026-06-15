@@ -305,6 +305,10 @@ class AmpViewer {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.modelRoot = new THREE.Group();
+    this.assemblyGroup = new THREE.Group();
+    this.boardGroup = new THREE.Group();
+    this.assemblyObjects = [];
+    this.boardObjects = [];
     this.pickables = [];
     this.materials = [];
     this.caseObjects = [];
@@ -335,6 +339,7 @@ class AmpViewer {
     this.root.appendChild(this.renderer.domElement);
     this.scene.background = new THREE.Color(0xf1f5f8);
     this.scene.add(this.modelRoot);
+    this.modelRoot.add(this.assemblyGroup, this.boardGroup);
     this.camera.position.set(150, -170, 115);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x7d8995, 1.25));
     const key = new THREE.DirectionalLight(0xffffff, 1.35);
@@ -371,7 +376,21 @@ class AmpViewer {
     this.setStatus("STEP", "");
     if (typeof window.occtimportjs !== "function") throw new Error("occt-import-js is not available");
     const occt = await window.occtimportjs({ locateFile: (file) => `./assets/vendor/${file}` });
-    const response = await fetch("./assets/models/assembly.step");
+    const assembly = await this.readStepModel(occt, "./assets/models/assembly.step");
+    this.importOcctResult(assembly.result, assembly.solidNames, this.assemblyGroup, this.assemblyObjects, { forceTags: ["case"] });
+    this.normalizeGroup(this.assemblyGroup);
+    const board = await this.readStepModel(occt, "./assets/models/amp100.STEP");
+    this.importOcctResult(board.result, board.solidNames, this.boardGroup, this.boardObjects);
+    this.normalizeGroup(this.boardGroup);
+    this.boardGroup.visible = false;
+    this.pickables = [...this.assemblyObjects, ...this.boardObjects];
+    this.caseObjects = this.assemblyObjects;
+    this.focus("all", { updateCard: true });
+    this.status.title = `assembly:${this.assemblyObjects.length}; board:${summarizeTags(this.boardObjects)}`;
+  }
+
+  async readStepModel(occt, path) {
+    const response = await fetch(path);
     if (!response.ok) throw new Error(`STEP request failed: ${response.status}`);
     const arrayBuffer = await response.arrayBuffer();
     const solidNames = extractStepSolidNames(new TextDecoder("utf-8").decode(arrayBuffer));
@@ -383,23 +402,19 @@ class AmpViewer {
       angularDeflection: 0.4,
     });
     if (!result.success || !result.meshes?.length) throw new Error("STEP import returned no meshes");
-    this.buildFromOcctResult(result, solidNames);
+    return { result, solidNames };
   }
 
-  buildFromOcctResult(result, solidNames = []) {
+  importOcctResult(result, solidNames = [], targetGroup = this.modelRoot, targetList = this.pickables, options = {}) {
     const nodeNames = mapMeshNodeNames(result.root);
     result.meshes.forEach((sourceMesh, index) => {
       const nodeName = nodeNames[index] || sourceMesh.name || "";
       const solidName = solidNames[index] || "";
-      const tags = classifyMesh(`${solidName} ${nodeName} ${sourceMesh.name || ""}`);
-      const mesh = this.createMesh(sourceMesh, tags, solidName || nodeName);
-      this.modelRoot.add(mesh);
-      this.pickables.push(mesh);
+      const tags = options.forceTags || classifyMesh(`${solidName} ${nodeName} ${sourceMesh.name || ""}`);
+      const mesh = this.createMesh(sourceMesh, tags, solidName || nodeName, { skipGeometryRefine: Boolean(options.forceTags) });
+      targetGroup.add(mesh);
+      targetList.push(mesh);
     });
-    this.normalizeModel();
-    if (!this.hasImportedCase()) this.createSyntheticCase();
-    this.focus("all", { updateCard: true });
-    this.status.title = `STEP: ${result.meshes.length} сеток; ${summarizeTags(this.pickables)}`;
   }
 
   hasImportedCase() {
@@ -410,7 +425,7 @@ class AmpViewer {
     return hasCase;
   }
 
-  createMesh(sourceMesh, tags, nodeName) {
+  createMesh(sourceMesh, tags, nodeName, options = {}) {
     const geometry = new THREE.BufferGeometry();
     const position = toFlatFloatArray(sourceMesh.attributes?.position?.array || []);
     geometry.setAttribute("position", new THREE.BufferAttribute(position, 3));
@@ -420,7 +435,7 @@ class AmpViewer {
     if (sourceMesh.index?.array?.length) geometry.setIndex(toFlatNumberArray(sourceMesh.index.array));
     geometry.computeBoundingSphere();
     geometry.computeBoundingBox();
-    const resolvedTags = refineTagsByGeometry(tags, geometry, nodeName);
+    const resolvedTags = options.skipGeometryRefine ? tags : refineTagsByGeometry(tags, geometry, nodeName);
     const sourceColor = sourceMesh.color || sourceMesh.face_colors?.[0];
     const material = new THREE.MeshStandardMaterial({
       color: colorForMesh(sourceColor, resolvedTags),
@@ -451,6 +466,15 @@ class AmpViewer {
     const normalizedBox = new THREE.Box3().setFromObject(this.modelRoot);
     const size = normalizedBox.getSize(new THREE.Vector3());
     this.modelRoot.userData.size = size;
+  }
+
+  normalizeGroup(group) {
+    const box = new THREE.Box3().setFromObject(group);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    group.children.forEach((child) => child.position.sub(center));
+    const normalizedBox = new THREE.Box3().setFromObject(group);
+    group.userData.size = normalizedBox.getSize(new THREE.Vector3());
   }
 
   createSyntheticCase() {
@@ -614,6 +638,9 @@ class AmpViewer {
 
   focus(focus = "all", options = {}) {
     if (options.soft && this.currentFocus === focus) return;
+    if (this.caseVisible && focus && !["all", "case"].includes(focus)) {
+      this.setCaseMode(false);
+    }
     this.currentFocus = focus || "all";
     this.applyHighlight(this.currentFocus);
     this.updateToolButtons(this.currentFocus);
@@ -624,7 +651,6 @@ class AmpViewer {
 
   objectsForFocus(focus) {
     if (!focus || focus === "all") return this.visiblePickables();
-    if (focus === "board") return this.visiblePickables().filter((object) => !object.userData.tags?.includes("case"));
     return this.visiblePickables().filter((object) => object.userData.tags?.includes(focus));
   }
 
@@ -661,14 +687,21 @@ class AmpViewer {
   }
 
   toggleCase(button) {
-    this.caseVisible = !this.caseVisible;
-    this.caseObjects.forEach((object) => {
-      object.visible = this.caseVisible;
-    });
-    button.classList.toggle("is-active", this.caseVisible);
-    button.classList.toggle("is-off", !this.caseVisible);
-    button.textContent = `Корпус: ${this.caseVisible ? "вкл" : "выкл"}`;
-    button.setAttribute("aria-pressed", String(this.caseVisible));
+    this.setCaseMode(!this.caseVisible);
+    this.focus("all", { updateCard: true });
+  }
+
+  setCaseMode(visible) {
+    this.caseVisible = visible;
+    this.assemblyGroup.visible = visible;
+    this.boardGroup.visible = !visible;
+    const button = this.controlsRoot.querySelector('[data-toggle="case"]');
+    if (button) {
+      button.classList.toggle("is-active", visible);
+      button.classList.toggle("is-off", !visible);
+      button.textContent = `Корпус: ${visible ? "вкл" : "выкл"}`;
+      button.setAttribute("aria-pressed", String(visible));
+    }
   }
 
   fitCamera(objects) {
