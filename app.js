@@ -315,6 +315,7 @@ class AmpViewer {
     this.currentFocus = "all";
     this.autoRotate = false;
     this.caseVisible = true;
+    this.grid = null;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
   }
@@ -349,7 +350,14 @@ class AmpViewer {
     fill.position.set(-120, 100, 90);
     this.scene.add(fill);
     const grid = new THREE.GridHelper(220, 22, 0xb7c2ca, 0xd7dee4);
-    grid.position.z = -5;
+    grid.rotation.x = Math.PI / 2;
+    grid.position.z = -6;
+    grid.material.opacity = 0.34;
+    grid.material.transparent = true;
+    grid.material.depthWrite = false;
+    grid.visible = false;
+    grid.renderOrder = -1;
+    this.grid = grid;
     this.scene.add(grid);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -442,7 +450,7 @@ class AmpViewer {
       roughness: roughnessFor(resolvedTags),
       metalness: resolvedTags.includes("copper") ? 0.18 : 0.04,
       transparent: resolvedTags.includes("case"),
-      opacity: resolvedTags.includes("case") ? 0.18 : 1,
+      opacity: resolvedTags.includes("case") ? 0.58 : 1,
       depthWrite: !resolvedTags.includes("case"),
       side: THREE.DoubleSide,
     });
@@ -661,7 +669,7 @@ class AmpViewer {
       const matches = !focus || focus === "all" || object.userData.tags?.includes(focus);
       const isCase = object.userData.tags?.includes("case");
       const shouldGhostCase = isCase && focus && focus !== "all" && focus !== "case";
-      material.opacity = shouldGhostCase ? 0.035 : matches ? material.userData.baseOpacity : 0.12;
+      material.opacity = shouldGhostCase ? 0.08 : matches ? material.userData.baseOpacity : 0.38;
       material.transparent = shouldGhostCase || !matches || material.userData.baseTransparent;
       material.depthWrite = shouldGhostCase ? false : matches ? material.userData.baseDepthWrite : false;
       if (material.emissive) {
@@ -695,6 +703,8 @@ class AmpViewer {
     this.caseVisible = visible;
     this.assemblyGroup.visible = visible;
     this.boardGroup.visible = !visible;
+    if (this.grid) this.grid.visible = !visible;
+    this.updateGridPlane();
     const button = this.controlsRoot.querySelector('[data-toggle="case"]');
     if (button) {
       button.classList.toggle("is-active", visible);
@@ -717,6 +727,20 @@ class AmpViewer {
     this.camera.position.copy(center).add(direction.multiplyScalar(distance));
     this.controls.target.copy(center);
     this.controls.update();
+    this.updateGridPlane(objects);
+  }
+
+  updateGridPlane(objects = null) {
+    if (!this.grid) return;
+    const source = objects?.length ? objects : this.visiblePickables();
+    const box = new THREE.Box3();
+    source.forEach((object) => box.expandByObject(object));
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxPlan = Math.max(size.x, size.y, 120);
+    this.grid.scale.setScalar(Math.max(maxPlan / 220, 1));
+    this.grid.position.set(center.x, center.y, box.min.z - Math.max(size.z * 0.035, 2));
   }
 
   updateToolButtons(focus) {
