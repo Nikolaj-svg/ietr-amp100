@@ -419,26 +419,28 @@ class AmpViewer {
     else geometry.computeVertexNormals();
     if (sourceMesh.index?.array?.length) geometry.setIndex(toFlatNumberArray(sourceMesh.index.array));
     geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
+    const resolvedTags = refineTagsByGeometry(tags, geometry, nodeName);
     const sourceColor = sourceMesh.color || sourceMesh.face_colors?.[0];
     const material = new THREE.MeshStandardMaterial({
-      color: colorForMesh(sourceColor, tags),
-      roughness: roughnessFor(tags),
-      metalness: tags.includes("copper") ? 0.18 : 0.04,
-      transparent: tags.includes("case"),
-      opacity: tags.includes("case") ? 0.22 : 1,
-      depthWrite: !tags.includes("case"),
+      color: colorForMesh(sourceColor, resolvedTags),
+      roughness: roughnessFor(resolvedTags),
+      metalness: resolvedTags.includes("copper") ? 0.18 : 0.04,
+      transparent: resolvedTags.includes("case"),
+      opacity: resolvedTags.includes("case") ? 0.18 : 1,
+      depthWrite: !resolvedTags.includes("case"),
       side: THREE.DoubleSide,
     });
-    if (tags.includes("leds")) {
+    if (resolvedTags.includes("leds")) {
       material.emissive = new THREE.Color(0xffe47a);
       material.emissiveIntensity = 0.18;
     }
     rememberMaterialBase(material);
     this.materials.push(material);
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.userData.tags = tags;
+    mesh.userData.tags = resolvedTags;
     mesh.userData.name = cleanPartName(nodeName || sourceMesh.name || "Компонент");
-    mesh.userData.description = describeTags(tags);
+    mesh.userData.description = describeTags(resolvedTags);
     return mesh;
   }
 
@@ -622,6 +624,7 @@ class AmpViewer {
 
   objectsForFocus(focus) {
     if (!focus || focus === "all") return this.visiblePickables();
+    if (focus === "board") return this.visiblePickables().filter((object) => !object.userData.tags?.includes("case"));
     return this.visiblePickables().filter((object) => object.userData.tags?.includes(focus));
   }
 
@@ -630,9 +633,11 @@ class AmpViewer {
       const material = object.material;
       if (!material) return;
       const matches = !focus || focus === "all" || object.userData.tags?.includes(focus);
-      material.opacity = matches ? material.userData.baseOpacity : 0.16;
-      material.transparent = !matches || material.userData.baseTransparent;
-      material.depthWrite = matches ? material.userData.baseDepthWrite : false;
+      const isCase = object.userData.tags?.includes("case");
+      const shouldGhostCase = isCase && focus && focus !== "all" && focus !== "case";
+      material.opacity = shouldGhostCase ? 0.035 : matches ? material.userData.baseOpacity : 0.12;
+      material.transparent = shouldGhostCase || !matches || material.userData.baseTransparent;
+      material.depthWrite = shouldGhostCase ? false : matches ? material.userData.baseDepthWrite : false;
       if (material.emissive) {
         material.emissive.copy(material.userData.baseEmissive || new THREE.Color(0x000000));
         material.emissiveIntensity = material.userData.baseEmissiveIntensity || 0;
@@ -675,7 +680,7 @@ class AmpViewer {
     const maxDim = Math.max(size.x, size.y, size.z, 10);
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
     const distance = Math.min(Math.max((maxDim / (2 * Math.tan(fov / 2))) * 1.55, 45), 480);
-    const direction = new THREE.Vector3(0.9, -1.05, 1.05).normalize();
+    const direction = new THREE.Vector3(0.55, -0.85, 1.45).normalize();
     this.camera.position.copy(center).add(direction.multiplyScalar(distance));
     this.controls.target.copy(center);
     this.controls.update();
@@ -806,12 +811,28 @@ function classifyMesh(name) {
   if (hasRef("IC") || hasRef("OP") || hasRef("DA") || source.includes("TL072") || source.includes("MC4558") || source.includes("7815") || source.includes("7915")) tags.push("ics");
   if (hasRef("J") || hasRef("XS") || hasRef("XP") || source.includes("CONN") || source.includes("SW")) tags.push("connectors");
   if (source.includes("COPPER")) tags.push("copper");
-  if (!tags.length && source.includes("AMP100.STEP-1")) tags.push("board");
-  if (!tags.length && (caseSource.includes("КОРП") || caseSource.includes("КРЫШ") || caseSource.includes("ВЫТЯНУТ") || caseSource.includes("БОБЫШКА") || caseSource.includes("СКРУГ") || caseSource.includes("CASE") || caseSource.includes("COVER") || caseSource.includes("БОЛТ") || caseSource.includes("SCREW") || caseSource.includes("BOLT"))) {
+  if (!tags.length && (caseSource.includes("КОРП") || caseSource.includes("КРЫШ") || caseSource.includes("ВЫТЯНУТ") || caseSource.includes("ВЫРЕЗ") || caseSource.includes("БОБЫШКА") || caseSource.includes("СКРУГ") || caseSource.includes("CASE") || caseSource.includes("COVER") || caseSource.includes("БОЛТ") || caseSource.includes("SCREW") || caseSource.includes("BOLT"))) {
     tags.push("case");
   }
-  if (!tags.length) tags.push("component");
+  if (!tags.length) tags.push("case");
   return tags;
+}
+
+function refineTagsByGeometry(tags, geometry, name = "") {
+  const refined = [...tags];
+  const source = decodeStepEscapes(name).toUpperCase().replaceAll("AMP100_ВКОРПУС", "");
+  const box = geometry.boundingBox;
+  if (!box) return refined.includes("case") ? refined : refined;
+  const size = box.getSize(new THREE.Vector3());
+  const dims = [size.x, size.y, size.z].sort((a, b) => b - a);
+  const looksLikeCaseByName = ["КОРП", "КРЫШ", "ВЫТЯНУТ", "ВЫРЕЗ", "БОБЫШКА", "СКРУГ", "CASE", "COVER", "BOLT", "SCREW"].some((token) => source.includes(token));
+  const looksLikeLargeShell = dims[0] > 70 && dims[1] > 35;
+  if (looksLikeCaseByName || looksLikeLargeShell) {
+    return ["case"];
+  }
+  const hasSpecificTag = refined.some((tag) => ["board", "resistors", "capacitors", "transistors", "ics", "connectors", "copper"].includes(tag));
+  if (refined.includes("case") || hasSpecificTag) return refined;
+  return refined;
 }
 
 function colorForMesh(sourceColor, tags) {
